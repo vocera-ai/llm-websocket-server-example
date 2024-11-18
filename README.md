@@ -24,8 +24,25 @@ source .venv/bin/activate
 # Install the dependencies
 pip install -r requirements.txt
 ```
-### Starting the application
+
+Update OpenAI API key and prompt in `main.py`
+```py
+...
+
+api_key = 'YOUR-OPENAI-API-KEY'
+
+...
+
+SYSTEM_PROMPT = {
+    "role": "system",
+    "content": """Your system prompt"""
+}
+
+...
 ```
+
+### Starting the application
+```bash
 python main.py
 ```
 
@@ -48,6 +65,6 @@ ngrok config add-authtoken <your-token>
 ```
 
 ### Forwarding port
-```
+```bash
 ngrok http 127.0.0.1:8765
 ```
