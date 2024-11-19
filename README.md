@@ -3,7 +3,7 @@
 ## Getting Started
 
 ### Requirements
- - Python 3.12+
+ - Python 3.9+
  - OpenAI API key
  - Ngrok
 
