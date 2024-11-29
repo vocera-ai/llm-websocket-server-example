@@ -1,4 +1,5 @@
 import asyncio
+import json
 import websockets
 import openai
 
@@ -47,7 +48,7 @@ async def chat_response(message, session_id):
                 chat_histories[session_id][0]  # Keep system prompt
             ] + chat_histories[session_id][-10:]  # Keep last 10 messages
         
-        return assistant_response
+        return json.dumps({"content": assistant_response})
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -56,13 +57,14 @@ async def handle_websocket(websocket, path):
     session_id = id(websocket)
     
     try:
-        await websocket.send('Hi! How can I help you today?')
+        await websocket.send(json.dumps({"content": "Hi! How can I help you today?"}))
         async for message in websocket:
+            message = json.loads(message)["content"]
             print(f"Received message: {message}")
-            
+
             # Get response from OpenAI
             response = await chat_response(message, session_id)
-            
+
             # Send response back to client
             await websocket.send(response)
             print(f"Sent response: {response}")
