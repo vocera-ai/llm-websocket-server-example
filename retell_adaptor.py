@@ -36,31 +36,31 @@ class RetellVoceraAdapter:
         
         # Set up Retell WebSocket server
         try:
-            self.retell_server = WebsocketServer(port=self.retell_port, host='0.0.0.0')
+            self.retell_server = WebsocketServer(port=self.retell_port, host='127.0.0.1')
             self.retell_server.set_fn_new_client(self.on_retell_connect)
             self.retell_server.set_fn_client_left(self.on_retell_disconnect)
             self.retell_server.set_fn_message_received(self.on_retell_message)
             
             # Start the server in a separate thread
             threading.Thread(target=self.retell_server.run_forever).start()
-            logger.info(f"Retell WebSocket server listening on port {self.retell_port}")
+            print(f"Retell WebSocket server listening on port {self.retell_port}")
         except Exception as e:
-            logger.error(f"Failed to start Retell WebSocket server: {str(e)}")
+            print(f"Failed to start Retell WebSocket server: {str(e)}")
             self.is_running = False
             return False
             
         # Set up Vocera WebSocket server
         try:
-            self.vocera_server = WebsocketServer(port=self.vocera_port, host='0.0.0.0')
+            self.vocera_server = WebsocketServer(port=self.vocera_port, host='127.0.0.1')
             self.vocera_server.set_fn_new_client(self.on_vocera_connect)
             self.vocera_server.set_fn_client_left(self.on_vocera_disconnect)
             self.vocera_server.set_fn_message_received(self.on_vocera_message)
             
             # Start the server in a separate thread
             threading.Thread(target=self.vocera_server.run_forever).start()
-            logger.info(f"Vocera WebSocket server listening on port {self.vocera_port}")
+            print(f"Vocera WebSocket server listening on port {self.vocera_port}")
         except Exception as e:
-            logger.error(f"Failed to start Vocera WebSocket server: {str(e)}")
+            print(f"Failed to start Vocera WebSocket server: {str(e)}")
             self.is_running = False
             if self.retell_server:
                 self.retell_server.shutdown_gracefully()
@@ -80,7 +80,7 @@ class RetellVoceraAdapter:
     
     def on_retell_connect(self, client, server):
         """Handle new Retell WebSocket connection"""
-        logger.info(f"New Retell client connected: {client['id']}")
+        print(f"New Retell client connected: {client['id']}")
         # Store client connection
         self.retell_clients[client['id']] = client
         
@@ -97,7 +97,7 @@ class RetellVoceraAdapter:
     
     def on_retell_disconnect(self, client, server):
         """Handle Retell WebSocket disconnection"""
-        logger.info(f"Retell client disconnected: {client['id']}")
+        print(f"Retell client disconnected: {client['id']}")
         # Remove client from our tracking
         if client['id'] in self.retell_clients:
             del self.retell_clients[client['id']]
@@ -114,7 +114,7 @@ class RetellVoceraAdapter:
                 
             elif interaction_type == "call_details":
                 # Handle call details - can be logged or stored
-                logger.info(f"Received call details: {data.get('call', {}).get('id')}")
+                print(f"Received call details: {data.get('call', {}).get('id')}")
                 
             elif interaction_type == "update_only":
                 # Handle transcript updates
@@ -125,13 +125,13 @@ class RetellVoceraAdapter:
                 self.handle_retell_response_request(client, data)
                 
         except Exception as e:
-            logger.error(f"Error handling Retell message: {str(e)}")
+            print(f"Error handling Retell message: {str(e)}")
     
     # ===== Vocera WebSocket Handlers =====
     
     def on_vocera_connect(self, client, server):
         """Handle new Vocera WebSocket connection"""
-        logger.info(f"New Vocera client connected: {client['id']}")
+        print(f"New Vocera client connected: {client['id']}")
         # Store client connection
         self.vocera_clients[client['id']] = client
         
@@ -141,7 +141,7 @@ class RetellVoceraAdapter:
     
     def on_vocera_disconnect(self, client, server):
         """Handle Vocera WebSocket disconnection"""
-        logger.info(f"Vocera client disconnected: {client['id']}")
+        print(f"Vocera client disconnected: {client['id']}")
         # Remove client from our tracking
         if client['id'] in self.vocera_clients:
             del self.vocera_clients[client['id']]
@@ -158,12 +158,12 @@ class RetellVoceraAdapter:
             self.handle_vocera_regular_message(message)
                 
         except Exception as e:
-            logger.error(f"Error handling Vocera message: {str(e)}")
+            print(f"Error handling Vocera message: {str(e)}")
     
     def send_to_vocera(self, message):
         """Send message to all connected Vocera clients"""
         if not self.vocera_clients:
-            logger.warning("No Vocera clients connected to send message to")
+            print("No Vocera clients connected to send message to")
             return
             
         # In a real implementation, you might want to target specific clients
@@ -172,12 +172,12 @@ class RetellVoceraAdapter:
             try:
                 self.vocera_server.send_message(client, json.dumps(message))
             except Exception as e:
-                logger.error(f"Error sending message to Vocera client {client_id}: {str(e)}")
+                print(f"Error sending message to Vocera client {client_id}: {str(e)}")
     
     def send_to_retell(self, message):
         """Send message to all connected Retell clients"""
         if not self.retell_clients:
-            logger.warning("No Retell clients connected to send message to")
+            print("No Retell clients connected to send message to")
             return
             
         # In a real implementation, you might want to target specific clients
@@ -186,7 +186,7 @@ class RetellVoceraAdapter:
             try:
                 self.retell_server.send_message(client, json.dumps(message))
             except Exception as e:
-                logger.error(f"Error sending message to Retell client {client_id}: {str(e)}")
+                print(f"Error sending message to Retell client {client_id}: {str(e)}")
     
     # ===== Message Conversion Handlers =====
     
@@ -207,13 +207,13 @@ class RetellVoceraAdapter:
         turntaking = data.get("turntaking")
         
         if turntaking:
-            logger.info(f"Turn taking: {turntaking}")
+            print(f"Turn taking: {turntaking}")
             
         # You could forward this to Vocera if needed
         # For now, we'll just log it
         if transcript and len(transcript) > 0:
             last_utterance = transcript[-1]
-            logger.info(f"Transcript update: {last_utterance.get('role')} - {last_utterance.get('content')}")
+            print(f"Transcript update: {last_utterance.get('role')} - {last_utterance.get('content')}")
     
     def handle_retell_response_request(self, client, data):
         """Handle response_required or reminder_required messages from Retell"""
