@@ -3,52 +3,33 @@ import time
 import logging
 import threading
 import socket
+import websocket
 from websocket_server import WebsocketServer
 
 logger = logging.getLogger(__name__)
 
 class RetellVoceraAdapter:
     """
-    Adapter that listens for both Retell and Vocera WebSocket connections
-    and converts messages between the two protocols.
+    Adapter that listens for Vocera WebSocket connections and forwards to Retell integration
     """
-    def __init__(self, retell_port, vocera_port):
-        self.retell_port = retell_port
+    def __init__(self, retell_url, vocera_port):
+        self.retell_url = retell_url
         self.vocera_port = vocera_port
         
         # WebSocket servers
-        self.retell_server = None
         self.vocera_server = None
         
         # Client connections
-        self.retell_clients = {}  # Store Retell client connections by ID
-        self.vocera_clients = {}  # Store Vocera client connections by ID
-        
+        self.vocera_to_retell = {}  # map Vocera connections to Retell connections
+        self.retell_to_vocera = {}  # map Retell connections to Vocera connections
+
         # State tracking
+        self.retell_transcripts = {}  # map Retell connections to transcripts
         self.response_id_map = {}  # Maps Retell response_id to our message tracking
-        self.tool_calls = {}  # Track tool calls by ID
-        self.last_response_id = None
-        self.is_running = False
-        
+
     def start(self):
         """Start the adapter by setting up both WebSocket servers"""
-        self.is_running = True
         
-        # Set up Retell WebSocket server
-        try:
-            self.retell_server = WebsocketServer(port=self.retell_port, host='127.0.0.1')
-            self.retell_server.set_fn_new_client(self.on_retell_connect)
-            self.retell_server.set_fn_client_left(self.on_retell_disconnect)
-            self.retell_server.set_fn_message_received(self.on_retell_message)
-            
-            # Start the server in a separate thread
-            threading.Thread(target=self.retell_server.run_forever).start()
-            print(f"Retell WebSocket server listening on port {self.retell_port}")
-        except Exception as e:
-            print(f"Failed to start Retell WebSocket server: {str(e)}")
-            self.is_running = False
-            return False
-            
         # Set up Vocera WebSocket server
         try:
             self.vocera_server = WebsocketServer(port=self.vocera_port, host='127.0.0.1')
@@ -61,69 +42,62 @@ class RetellVoceraAdapter:
             print(f"Vocera WebSocket server listening on port {self.vocera_port}")
         except Exception as e:
             print(f"Failed to start Vocera WebSocket server: {str(e)}")
-            self.is_running = False
-            if self.retell_server:
-                self.retell_server.shutdown_gracefully()
             return False
             
         return True
         
     def stop(self):
         """Stop the adapter and close all connections"""
-        self.is_running = False
-        if self.retell_server:
-            self.retell_server.shutdown_gracefully()
         if self.vocera_server:
             self.vocera_server.shutdown_gracefully()
             
     # ===== Retell WebSocket Handlers =====
-    
-    def on_retell_connect(self, client, server):
-        """Handle new Retell WebSocket connection"""
-        print(f"New Retell client connected: {client['id']}")
-        # Store client connection
-        self.retell_clients[client['id']] = client
-        
-        # Send initial config to Retell
-        config = {
-            "response_type": "config",
-            "config": {
-                "auto_reconnect": True,
-                "call_details": True,
-                "transcript_with_tool_calls": True
-            }
-        }
-        server.send_message(client, json.dumps(config))
-    
-    def on_retell_disconnect(self, client, server):
+
+    def on_retell_open(self, ws):
+        """Handle successful connection to Retell WebSocket"""
+        print("Connected to Retell WebSocket")
+
+    def on_retell_close(self, ws, close_status_code, close_msg):
         """Handle Retell WebSocket disconnection"""
-        print(f"Retell client disconnected: {client['id']}")
-        # Remove client from our tracking
-        if client['id'] in self.retell_clients:
-            del self.retell_clients[client['id']]
+        print(f"Retell WebSocket connection closed: {close_status_code} - {close_msg}")
+        if ws in self.retell_to_vocera:
+            vocera_client = self.retell_to_vocera[ws]
+
+            for i in self.vocera_server.clients:
+                if i['id'] == vocera_client['id']:
+                    i['handler'].connection.close()
+                    break
+
+            del self.vocera_to_retell[vocera_client]
+            del self.retell_to_vocera[ws]
+            del self.retell_transcripts[ws]
+
+    def on_retell_error(self, ws, error):
+        """Handle Retell WebSocket errors"""
+        print(f"Retell WebSocket error: {error}")
     
-    def on_retell_message(self, client, server, message_str):
+    def on_retell_message(self, ws, message_str):
         """Handle messages from Retell WebSocket"""
         try:
             data = json.loads(message_str)
-            interaction_type = data.get("interaction_type")
+            content = data.get("content", "").strip()
+            content_complete = data.get("content_complete", True)
+            response_id = data.get("response_id", None)
+
+            message = None
+            if response_id is not None:
+                if response_id not in self.response_id_map:
+                    self.response_id_map[response_id] = []
+                self.response_id_map[response_id].append(content)
+
+                if content_complete:
+                    message = " ".join(self.response_id_map.get(response_id, []))
+
+            if not message:
+                return
+
+            self.handle_retell_message(ws, data, message)
             
-            if interaction_type == "ping_pong":
-                # Handle ping_pong to keep connection alive
-                self.handle_retell_ping(client, data)
-                
-            elif interaction_type == "call_details":
-                # Handle call details - can be logged or stored
-                print(f"Received call details: {data.get('call', {}).get('id')}")
-                
-            elif interaction_type == "update_only":
-                # Handle transcript updates
-                self.handle_retell_update(data)
-                
-            elif interaction_type in ["response_required", "reminder_required"]:
-                # Handle requests for agent responses
-                self.handle_retell_response_request(client, data)
-                
         except Exception as e:
             print(f"Error handling Retell message: {str(e)}")
     
@@ -132,20 +106,37 @@ class RetellVoceraAdapter:
     def on_vocera_connect(self, client, server):
         """Handle new Vocera WebSocket connection"""
         print(f"New Vocera client connected: {client['id']}")
-        # Store client connection
-        self.vocera_clients[client['id']] = client
-        
-        # Note: In a real implementation, you would validate headers here
-        # Since websocket_server doesn't expose headers directly, you might need
-        # to implement a custom handshake validation
+        try:
+            # Setup WebSocket with callbacks
+            retell_ws = websocket.WebSocketApp(
+                self.retell_url,
+                on_open=self.on_retell_open,
+                on_message=self.on_retell_message,
+                on_error=self.on_retell_error,
+                on_close=self.on_retell_close
+            )
+            self.retell_to_vocera[retell_ws] = client    
+            self.vocera_to_retell[client['id']] = retell_ws
+            self.retell_transcripts[retell_ws] = []
+
+            # Start the connection in a separate thread
+            threading.Thread(target=retell_ws.run_forever).start()
+            print(f"Connecting to Retell WebSocket at {self.retell_url}")
+        except Exception as e:
+            print(f"Failed to start Retell WebSocket server: {str(e)}")
+            return False
     
     def on_vocera_disconnect(self, client, server):
         """Handle Vocera WebSocket disconnection"""
         print(f"Vocera client disconnected: {client['id']}")
         # Remove client from our tracking
-        if client['id'] in self.vocera_clients:
-            del self.vocera_clients[client['id']]
-    
+        if client['id'] in self.vocera_to_retell:
+            retell_ws = self.vocera_to_retell[client['id']]
+            retell_ws.close()
+            del self.retell_to_vocera[retell_ws]
+            del self.vocera_to_retell[client['id']]
+            del self.retell_transcripts[retell_ws]
+
     def on_vocera_message(self, client, server, message_str):
         """Handle messages from Vocera WebSocket"""
         try:
@@ -155,120 +146,51 @@ class RetellVoceraAdapter:
             if not content:
                 return
                 
-            self.handle_vocera_regular_message(message)
+            self.handle_vocera_message(client, message)
                 
         except Exception as e:
             print(f"Error handling Vocera message: {str(e)}")
-    
-    def send_to_vocera(self, message):
-        """Send message to all connected Vocera clients"""
-        if not self.vocera_clients:
-            print("No Vocera clients connected to send message to")
-            return
-            
-        # In a real implementation, you might want to target specific clients
-        # For now, we'll broadcast to all connected clients
-        for client_id, client in self.vocera_clients.items():
-            try:
-                self.vocera_server.send_message(client, json.dumps(message))
-            except Exception as e:
-                print(f"Error sending message to Vocera client {client_id}: {str(e)}")
-    
-    def send_to_retell(self, message):
-        """Send message to all connected Retell clients"""
-        if not self.retell_clients:
-            print("No Retell clients connected to send message to")
-            return
-            
-        # In a real implementation, you might want to target specific clients
-        # For now, we'll broadcast to all connected clients
-        for client_id, client in self.retell_clients.items():
-            try:
-                self.retell_server.send_message(client, json.dumps(message))
-            except Exception as e:
-                print(f"Error sending message to Retell client {client_id}: {str(e)}")
-    
-    # ===== Message Conversion Handlers =====
-    
-    def handle_retell_ping(self, client, data):
-        """Handle ping_pong messages from Retell"""
-        # Send ping_pong response back to Retell
-        response = {
-            "response_type": "ping_pong",
-            "timestamp": int(time.time() * 1000)
-        }
-        self.retell_server.send_message(client, json.dumps(response))
-    
-    def handle_retell_update(self, data):
-        """Handle update_only messages from Retell"""
-        # These are just transcript updates, no response needed
-        # You might want to log or process these updates
-        transcript = data.get("transcript", [])
-        turntaking = data.get("turntaking")
-        
-        if turntaking:
-            print(f"Turn taking: {turntaking}")
-            
-        # You could forward this to Vocera if needed
-        # For now, we'll just log it
-        if transcript and len(transcript) > 0:
-            last_utterance = transcript[-1]
-            print(f"Transcript update: {last_utterance.get('role')} - {last_utterance.get('content')}")
-    
-    def handle_retell_response_request(self, client, data):
-        """Handle response_required or reminder_required messages from Retell"""
-        response_id = data.get("response_id")
-        self.last_response_id = response_id
-        
-        # Convert to Vocera's format and send
-        transcript = data.get("transcript", [])
-        if transcript and len(transcript) > 0:
-            last_utterance = transcript[-1]
-            
-            # Create a message in Vocera's format
-            vocera_message = {
-                'content': last_utterance.get('content', ''),
-                'role': 'user'  # Assuming this is from the user
-            }
-            
-            # Send to Vocera
-            self.send_to_vocera(vocera_message)
-    
-    def handle_vocera_regular_message(self, message):
-        """Handle regular messages from Vocera"""
-        content = message.get('content', '')
-        
-        # Check if we have a pending response_id from Retell
-        if self.last_response_id:
-            # Convert to Retell response format
-            response = {
-                "response_type": "response",
-                "response_id": self.last_response_id,
-                "content": content,
-                "content_complete": True
-            }
-            
-            # Check if this message should end the call
-            if "end call" in content.lower() or "goodbye" in content.lower():
-                response["end_call"] = True
-                
-            self.send_to_retell(response)
-        else:
-            # No pending response request, send as agent_interrupt
-            interrupt = {
-                "response_type": "agent_interrupt",
-                "interrupt_id": int(time.time() * 1000),  # Use timestamp as ID
-                "content": content,
-                "content_complete": True,
-                "no_interruption_allowed": True  # Prevent interruption
-            }
-            self.send_to_retell(interrupt)
 
+    # ===== Message Conversion Handlers =====
+
+    def handle_retell_message(self, ws, data, message_str):
+        """Handle messages from Retell"""
+        message = {
+            "role": "agent",
+            "content": message_str,
+        }
+        transcript = self.retell_transcripts[ws]
+        transcript.append(message)
+        vocera_client = self.retell_to_vocera[ws]
+        print(f"{message['role']}: {message['content']}")
+        self.vocera_server.send_message(vocera_client, json.dumps(message))
+
+    def handle_vocera_message(self, client, data):
+        """Handle messages from Vocera"""
+        content = data.get('content', '')
+        retell_ws = self.vocera_to_retell[client['id']]
+        transcript = self.retell_transcripts[retell_ws]
+        message = {
+            "role": "user",
+            "content": content,
+        }
+        transcript.append(message)
+        response = {
+            "interaction_type": "response_required",
+            "response_id":  int(time.time() * 1000),  # Use timestamp as ID
+            "transcript": transcript,
+        }
+        print(f"{message['role']}: {message['content']}")
+        try:
+            retell_ws.send(json.dumps(response))
+        except Exception as e:
+            time.sleep(1)  # Wait for the connection to be established
+            retell_ws.send(json.dumps(response))
 
 # Example usage
 if __name__ == "__main__":
     # Configuration
-    RETELL_PORT = 8765  # Port to listen for Retell connections
+    RETELL_URL = "ws://127.0.0.1:8080/llm-websocket/call-id"
     VOCERA_PORT = 8766  # Port to listen for Vocera connections
     
     # Configure logging
@@ -279,7 +201,7 @@ if __name__ == "__main__":
     
     # Create and start adapter
     adapter = RetellVoceraAdapter(
-        RETELL_PORT, 
+        RETELL_URL, 
         VOCERA_PORT,
     )
     
