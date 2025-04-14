@@ -68,7 +68,6 @@ class RetellVoceraAdapter:
                     i['handler'].connection.close()
                     break
 
-            del self.vocera_to_retell[vocera_client]
             del self.retell_to_vocera[ws]
             del self.retell_transcripts[ws]
 
@@ -80,23 +79,14 @@ class RetellVoceraAdapter:
         """Handle messages from Retell WebSocket"""
         try:
             data = json.loads(message_str)
-            content = data.get("content", "").strip()
-            content_complete = data.get("content_complete", True)
-            response_id = data.get("response_id", None)
+            response_type = data.get("response_type", "")
 
-            message = None
-            if response_id is not None:
-                if response_id not in self.response_id_map:
-                    self.response_id_map[response_id] = []
-                self.response_id_map[response_id].append(content)
-
-                if content_complete:
-                    message = " ".join(self.response_id_map.get(response_id, []))
-
-            if not message:
-                return
-
-            self.handle_retell_message(ws, data, message)
+            if response_type == "tool_call_invocation":
+                self.handle_retell_tool_call_invocation(ws, data)
+            elif response_type == "tool_call_result":
+                self.handle_retell_tool_call_result(ws, data)
+            else:
+                self.handle_retell_message(ws, data)
             
         except Exception as e:
             print(f"Error handling Retell message: {str(e)}")
@@ -133,9 +123,7 @@ class RetellVoceraAdapter:
         if client['id'] in self.vocera_to_retell:
             retell_ws = self.vocera_to_retell[client['id']]
             retell_ws.close()
-            del self.retell_to_vocera[retell_ws]
             del self.vocera_to_retell[client['id']]
-            del self.retell_transcripts[retell_ws]
 
     def on_vocera_message(self, client, server, message_str):
         """Handle messages from Vocera WebSocket"""
@@ -153,16 +141,65 @@ class RetellVoceraAdapter:
 
     # ===== Message Conversion Handlers =====
 
-    def handle_retell_message(self, ws, data, message_str):
+    def handle_retell_message(self, ws, data):
         """Handle messages from Retell"""
+
+        # Merge content from multiple messages
+        content = data.get("content", "").strip()
+        content_complete = data.get("content_complete", True)
+        response_id = data.get("response_id", None)
+
+        content_merged = None
+        if response_id is not None:
+            if response_id not in self.response_id_map:
+                self.response_id_map[response_id] = []
+            self.response_id_map[response_id].append(content)
+
+            if content_complete:
+                content_merged = " ".join(self.response_id_map.get(response_id, []))
+
+        if not content_merged:
+            return
+
         message = {
             "role": "agent",
-            "content": message_str,
+            "content": content_merged,
         }
         transcript = self.retell_transcripts[ws]
         transcript.append(message)
         vocera_client = self.retell_to_vocera[ws]
         print(f"{message['role']}: {message['content']}")
+        self.vocera_server.send_message(vocera_client, json.dumps(message))
+
+    def handle_retell_tool_call_invocation(self, ws, data):
+        message_data = {
+            "id": data.get("tool_call_id", ""),
+            "name": data.get("name", ""),
+            "arguments": data.get("arguments", ""),
+        }
+        message = {
+            "role": "Function Call",
+            "data": message_data,
+        }
+        transcript = self.retell_transcripts[ws]
+        transcript.append(data)
+        vocera_client = self.retell_to_vocera[ws]
+        print(f"{message['role']}: {message['data']}")
+        self.vocera_server.send_message(vocera_client, json.dumps(message))
+
+    def handle_retell_tool_call_result(self, ws, data):
+        message_data = {
+            "id": data.get("tool_call_id", ""),
+            "result": data.get("content", ""),
+        }
+        message = {
+            "role": "Function Call Result",
+            "data": message_data,
+        }
+        transcript = self.retell_transcripts[ws]
+        transcript.append(data)
+        vocera_client = self.retell_to_vocera[ws]
+        print(f"{message['role']}: {message['data']}")
         self.vocera_server.send_message(vocera_client, json.dumps(message))
 
     def handle_vocera_message(self, client, data):
