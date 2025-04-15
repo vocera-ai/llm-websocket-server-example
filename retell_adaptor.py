@@ -3,7 +3,9 @@ import time
 import logging
 import threading
 import socket
+import uuid
 import websocket
+import requests
 from websocket_server import WebsocketServer
 
 logger = logging.getLogger(__name__)
@@ -53,9 +55,28 @@ class RetellVoceraAdapter:
             
     # ===== Retell WebSocket Handlers =====
 
+    def send_webhook(self, call_id):
+        webhook_data = {
+                "event": "call_started",
+                "call": {
+                    "call_id": call_id,
+                    "from_number": "1122334455"  # You can modify this as needed
+                }
+            }
+        # send webhook to retell
+        # Define the webhook URL
+        webhook_url = f"{'https' if secure else 'http'}://{url}/webhook"
+        # Make the webhook POST request
+        response = requests.post(webhook_url, json=webhook_data)
+        if response.status_code == 200:
+            print("Webhook notification sent successfully")
+        else:
+            print(f"Failed to send webhook notification: {response.status_code}")
+
     def on_retell_open(self, ws):
         """Handle successful connection to Retell WebSocket"""
         print("Connected to Retell WebSocket")
+        self.send_webhook(call_id)
 
     def on_retell_close(self, ws, close_status_code, close_msg):
         """Handle Retell WebSocket disconnection"""
@@ -224,10 +245,16 @@ class RetellVoceraAdapter:
             time.sleep(1)  # Wait for the connection to be established
             retell_ws.send(json.dumps(response))
 
+def create_call_id():
+    return str(uuid.uuid4())
+
 # Example usage
 if __name__ == "__main__":
     # Configuration
-    RETELL_URL = "ws://127.0.0.1:8080/llm-websocket/call-id"
+    call_id = create_call_id()
+    url = "localhost:8080"
+    secure = False
+    RETELL_URL = f"{'wss' if secure else 'ws'}://{url}/llm-websocket/{call_id}"
     VOCERA_PORT = 8766  # Port to listen for Vocera connections
     
     # Configure logging
