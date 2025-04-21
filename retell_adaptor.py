@@ -243,7 +243,7 @@ class RetellVoceraAdapter:
         response = {
             "interaction_type": "response_required",
             "response_id":  int(time.time() * 1000),  # Use timestamp as ID
-            "transcript": transcript,
+            "transcript_with_tool_calls": transcript,
         }
         print(f"{message['role']}: {message['content']}")
         try:
