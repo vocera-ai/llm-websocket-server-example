@@ -26,6 +26,7 @@ class RetellVoceraAdapter:
         self.retell_to_vocera = {}  # map Retell connections to Vocera connections
 
         # State tracking
+        self.retell_to_call_id = {}
         self.retell_transcripts = {}  # map Retell connections to transcripts
         self.response_id_map = {}  # Maps Retell response_id to our message tracking
 
@@ -76,7 +77,7 @@ class RetellVoceraAdapter:
     def on_retell_open(self, ws):
         """Handle successful connection to Retell WebSocket"""
         print("Connected to Retell WebSocket")
-        self.send_webhook(call_id)
+        self.send_webhook(self.retell_to_call_id[ws])
 
     def on_retell_close(self, ws, close_status_code, close_msg):
         """Handle Retell WebSocket disconnection"""
@@ -117,22 +118,26 @@ class RetellVoceraAdapter:
     def on_vocera_connect(self, client, server):
         """Handle new Vocera WebSocket connection"""
         print(f"New Vocera client connected: {client['id']}")
+        call_id = create_call_id()
+        url = self.retell_url + call_id
+
         try:
             # Setup WebSocket with callbacks
             retell_ws = websocket.WebSocketApp(
-                self.retell_url,
+                url,
                 on_open=self.on_retell_open,
                 on_message=self.on_retell_message,
                 on_error=self.on_retell_error,
                 on_close=self.on_retell_close
             )
+            self.retell_to_call_id[retell_ws] = call_id
             self.retell_to_vocera[retell_ws] = client    
             self.vocera_to_retell[client['id']] = retell_ws
             self.retell_transcripts[retell_ws] = []
 
             # Start the connection in a separate thread
             threading.Thread(target=retell_ws.run_forever).start()
-            print(f"Connecting to Retell WebSocket at {self.retell_url}")
+            print(f"Connecting to Retell WebSocket at {url}")
         except Exception as e:
             print(f"Failed to start Retell WebSocket server: {str(e)}")
             return False
@@ -203,6 +208,7 @@ class RetellVoceraAdapter:
             "data": message_data,
         }
         transcript = self.retell_transcripts[ws]
+        data['role'] = 'tool_call_invocation'
         transcript.append(data)
         vocera_client = self.retell_to_vocera[ws]
         print(f"{message['role']}: {message['data']}")
@@ -218,6 +224,7 @@ class RetellVoceraAdapter:
             "data": message_data,
         }
         transcript = self.retell_transcripts[ws]
+        data['role'] = 'tool_call_result'
         transcript.append(data)
         vocera_client = self.retell_to_vocera[ws]
         print(f"{message['role']}: {message['data']}")
@@ -254,7 +261,7 @@ if __name__ == "__main__":
     call_id = create_call_id()
     url = "localhost:8080"
     secure = False
-    RETELL_URL = f"{'wss' if secure else 'ws'}://{url}/llm-websocket/{call_id}"
+    RETELL_URL = f"{'wss' if secure else 'ws'}://{url}/llm-websocket/"
     VOCERA_PORT = 8766  # Port to listen for Vocera connections
     
     # Configure logging
