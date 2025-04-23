@@ -48,6 +48,13 @@ class RetellVoceraAdapter:
         """Stop the adapter and close all connections"""
         if self.vocera_server:
             self.vocera_server.shutdown_gracefully()
+
+    def _get_response_id(self, transcript):
+        cnt = 0
+        for message in transcript:
+            if message['role'] == 'user':
+                cnt += 1
+        return cnt-1
             
     # ===== Retell WebSocket Handlers =====
 
@@ -260,12 +267,13 @@ class RetellVoceraAdapter:
         transcript = self.retell_data[retell_ws]['transcript']
         transcript.append(message)
 
+        response_id = self._get_response_id(transcript)
         response = {
             "interaction_type": "response_required",
-            "response_id":  int(time.time() * 1000),  # Use timestamp as ID
+            "response_id":  response_id,
             "transcript_with_tool_calls": transcript,
         }
-        print(f"{message['role']}: {message['content']}")
+        print(f"[{response_id}] {message['role']}: {message['content']}")
         try:
             retell_ws.send(json.dumps(response))
         except Exception as e:
