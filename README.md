@@ -3,11 +3,13 @@
 ## Getting Started
 
 ### Requirements
- - Python 3.9+
- - OpenAI API key
- - Ngrok
+
+- Python 3.9+
+- OpenAI API key
+- Ngrok
 
 ### Installation
+
 ```bash
 # Clone the repository
 git clone https://github.com/vocera-ai/llm-websocket-server-example.git
@@ -26,6 +28,7 @@ pip install -r requirements.txt
 ```
 
 Update OpenAI API key and prompt in `main.py`
+
 ```py
 ...
 
@@ -42,14 +45,47 @@ SYSTEM_PROMPT = {
 ```
 
 ### Starting the application
+
 ```bash
 python main.py
+```
+
+## Adapters
+
+### Retell Adapter
+
+The RetellVoceraAdapter connects Vocera WebSocket clients to the Retell integration.
+
+- Default client WebSocket port: 8766
+
+#### Running the Adapter
+
+```bash
+python retell_adaptor.py
+```
+
+### VoiceFlow Adapter
+
+The VoiceFlowAdapter connects client WebSocket connections to the VoiceFlow API.
+
+#### Environment Variables
+
+- `VOICEFLOW_API_KEY`: Required. Your VoiceFlow API key.
+- `VOICEFLOW_VERSION_ID`: Optional. Defaults to "production".
+- Default client WebSocket port: 8766
+
+#### Running the Adapter
+
+```bash
+python voiceflow_adapter.py
 ```
 
 ## Serving LLM Websocket Server Over Internet
 
 ### Installing ngrok
+
 Please refer: https://dashboard.ngrok.com/get-started/setup/linux
+
 ```bash
 # Install ngrok
 curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc \
@@ -65,6 +101,7 @@ ngrok config add-authtoken <your-token>
 ```
 
 ### Forwarding port
+
 ```bash
 ngrok http 127.0.0.1:8765
 ```
